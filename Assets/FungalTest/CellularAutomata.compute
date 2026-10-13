@@ -1,0 +1,77 @@
+#pragma kernel Initialize
+#pragma kernel Tick
+#pragma kernel Copy
+
+#define THREAD_SIZE 8
+
+RWTexture2D<uint> _TextureWrite;
+Texture2D<uint> _TextureRead;
+
+int _Resolution;
+int _Step;
+
+
+[numthreads(THREAD_SIZE,THREAD_SIZE,1)]
+void Initialize (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Resolution || id.y >= _Resolution)
+        return;
+    
+    uint output = 0;
+    
+    int halfResolution = _Resolution / 2;
+    
+    if (id.x == halfResolution && id.y == halfResolution)
+        output = 1;
+    
+    _TextureWrite[id.xy] = output;
+}
+
+
+
+
+[numthreads(THREAD_SIZE,THREAD_SIZE,1)]
+void Tick (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Resolution || id.y >= _Resolution)
+        return;
+    
+    uint2 index = id.xy;
+    int2 offset = int2(1,0); 
+    uint sampleUp       = _TextureRead[index + offset.yx];
+    uint sampleDown     = _TextureRead[index - offset.yx];
+    uint sampleLeft     = _TextureRead[index - offset.xy];
+    uint sampleRight    = _TextureRead[index + offset.xy];
+    uint sampleSelf     = _TextureRead[index];
+    
+    uint sum = sampleUp + sampleDown + sampleLeft + sampleRight + sampleSelf;
+    
+    sum = 0;
+    for (int x = -1; x <= 1; x++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            sum += _TextureRead[index + int2(x,y)];
+        }    
+    }
+    
+    uint output = 0;
+    if (sum > 0)
+        output = 1;
+    
+    if (sum > 7)
+        output = 0;
+    
+    _TextureWrite[id.xy] = output;
+}
+
+
+
+[numthreads(THREAD_SIZE,THREAD_SIZE,1)]
+void Copy (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Resolution || id.y >= _Resolution)
+        return;
+    
+    _TextureWrite[id.xy] = _TextureRead[id.xy];
+}
