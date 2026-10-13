@@ -21,6 +21,8 @@ Shader "Fungal/FungalTexture"
             #pragma fragment frag
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "FungusData.hlsl"
+            #include "HSV.hlsl"
             
 			struct Attributes
             {
@@ -69,12 +71,29 @@ Shader "Fungal/FungalTexture"
             float4 frag(Varyings IN) : SV_Target
             {
 				float4 color = 0;
-				
-                uint3 index = uint3(IN.uv * _Resolution, 0);
-                uint texSample = _TextureWrite.Load(index);
+				color.a = 1;
                 
-                if (texSample > 0)
-                    color.rgb = 1;
+                uint3 index = uint3(IN.uv * _Resolution, 0);
+                uint cell = _TextureWrite.Load(index);
+                
+                float cellMass = GetFungalMass(cell);
+                float attractant = GetChemoAttractant(cell);
+                
+                float mass01 = cellMass;
+                float attractant01 = attractant;
+                
+                float3 hsv = 0;
+                hsv.z = mass01;
+                hsv.y = attractant01;
+                
+                color.rgb = hsv2rgb(hsv);
+                
+                color.g = mass01;
+                color.b = attractant01;
+                color.r = 0;
+                
+                if (!IsCellAvailable(cell))
+                    color.rgb = float3(1, 1, 0.5);
                 
                 return color;
 			}

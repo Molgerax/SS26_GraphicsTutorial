@@ -14,6 +14,16 @@ namespace MechTech
         
         [SerializeField, Range(0, 60)] private float updatesPerSecond = 10;
 
+        [SerializeField] private Vector3 massParameters;
+        [SerializeField] private Vector3 attractantParameters;
+        [SerializeField] private float physarumAttraction = 1;
+        [SerializeField] private float chemoConsumption = 1;
+        
+        [Header("Noise")]
+        [SerializeField] private float noiseScale = 1;
+
+        [SerializeField] private float noiseCutoff = 0.1f;
+        
         private float _updateTimer;
         private int _simulationStep;
         private MaterialPropertyBlock _propertyBlock;
@@ -103,6 +113,15 @@ namespace MechTech
             cs.SetInt(PropertyIDs.Step, _simulationStep);
             cs.SetInt(PropertyIDs.Resolution, resolution);
             cs.SetFloat(PropertyIDs.Time, Time.time);
+
+            cs.SetVector(PropertyIDs.MassParam, massParameters);
+            cs.SetVector(PropertyIDs.AttractParam, attractantParameters);
+            cs.SetFloat(PropertyIDs.PhysarumAttraction, physarumAttraction);
+            cs.SetFloat(PropertyIDs.ChemoConsumption, chemoConsumption);
+            
+            cs.SetFloat(PropertyIDs.NoiseScale, noiseScale);
+            cs.SetFloat(PropertyIDs.NoiseCutoff, noiseCutoff);
+
             
             cs.DispatchExact(kernelId, resolution, resolution);
             
@@ -125,6 +144,14 @@ namespace MechTech
             public static readonly int Resolution = Shader.PropertyToID("_Resolution");
             public static readonly int Time = Shader.PropertyToID("_Time");
             public static readonly int Step = Shader.PropertyToID("_Step");
+            
+            public static readonly int NoiseScale = Shader.PropertyToID("_NoiseScale");
+            public static readonly int NoiseCutoff = Shader.PropertyToID("_NoiseCutoff");
+            
+            public static readonly int PhysarumAttraction = Shader.PropertyToID("_PhysarumAttraction");
+            public static readonly int ChemoConsumption = Shader.PropertyToID("_ChemoConsumption");
+            public static readonly int MassParam = Shader.PropertyToID("_PMP");
+            public static readonly int AttractParam = Shader.PropertyToID("_CAP");
         }
     }
 }

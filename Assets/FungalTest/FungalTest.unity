@@ -211,7 +211,13 @@ MonoBehaviour:
   resolution: 256
   texture: {fileID: 0}
   render: {fileID: 573420888}
-  updatesPerSecond: 1
+  updatesPerSecond: 60
+  massParameters: {x: 0.1, y: 0.071, z: 0.14}
+  attractantParameters: {x: 1, y: 0.71, z: 1}
+  physarumAttraction: 5
+  chemoConsumption: 0.71
+  noiseScale: 6
+  noiseCutoff: 0.1
 --- !u!4 &573420891
 Transform:
   m_ObjectHideFlags: 0

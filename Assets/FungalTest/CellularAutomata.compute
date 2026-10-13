@@ -4,63 +4,184 @@
 
 #define THREAD_SIZE 8
 
+#include "FungusData.hlsl"
+#include "Hash.hlsl"
+#include "SimplexNoise.hlsl"
+
 RWTexture2D<uint> _TextureWrite;
 Texture2D<uint> _TextureRead;
 
 int _Resolution;
 int _Step;
 
+float _PhysarumAttraction;
+float _ChemoConsumption;
+
+#define PAP (_PhysarumAttraction)
+
+float3 _PMP;
+float3 _CAP;
+
+float _NoiseScale;
+float _NoiseCutoff;
 
 [numthreads(THREAD_SIZE,THREAD_SIZE,1)]
 void Initialize (uint3 id : SV_DispatchThreadID)
 {
+    if (id.x == 0 || id.y == 0 || id.x == _Resolution - 1 || id.y == _Resolution - 1)
+    {
+        _TextureWrite[id.xy] = SetCell(0, 0);
+        return;
+    }
+        
+    
     if (id.x >= _Resolution || id.y >= _Resolution)
         return;
     
     uint output = 0;
+    float2 uv = (id.xy + 0.5) / (_Resolution);
     
-    int halfResolution = _Resolution / 2;
+    float dist = (length(uv - 0.5));
     
-    if (id.x == halfResolution && id.y == halfResolution)
-        output = 1;
+    float cellMass = step(dist, 0.01) * 0.01;
+    
+    float2 sampleUv = uv * _NoiseScale;
+    float attractant = 0;
+    float factor = 1;
+    float f = 0;
+    
+    for (int i = 0; i < 4; ++i)
+    {
+        attractant += SimplexNoise3D(float3(sampleUv, i)) * factor; 
+        f += factor;
+        factor *= 0.5;
+        sampleUv *= 2;
+    }
+    attractant /= f;
+    
+    attractant *= step(dist, 0.01);
+    
+    attractant = saturate(attractant);
+    
+    output = SetCell(cellMass,  attractant);
+    
+    float simplexNoise = SimplexNoise3D(float3(uv * _NoiseScale, 0));
+    
+    if (simplexNoise > _NoiseCutoff)
+        output = BLOCKING_BIT;
     
     _TextureWrite[id.xy] = output;
 }
 
+
+float GetMaxChemoAttractant(uint2 cell)
+{
+    float maxAttractant = 0;
+    
+    for (int x = -1; x <= 1; x++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            uint sampleCell = _TextureRead[cell + int2(x,y)];
+            maxAttractant = max(maxAttractant, GetChemoAttractant(sampleCell));
+        }    
+    }
+    
+    return maxAttractant;
+}
+
+
+float GetPhysarumAttractionAtPosition(uint2 cell, int2 direction, uint maxAttractant)
+{
+    float result = 0;
+    
+    uint2 targetId = cell + direction;
+    uint2 oppositeId = cell - direction;
+    
+    if (GetChemoAttractant(_TextureRead[targetId]) == maxAttractant && maxAttractant > 0)
+        result = PAP;
+    else if (GetChemoAttractant(_TextureRead[oppositeId]) == maxAttractant && maxAttractant > 0)
+        result = - PAP;
+    
+    return result;
+}
 
 
 
 [numthreads(THREAD_SIZE,THREAD_SIZE,1)]
 void Tick (uint3 id : SV_DispatchThreadID)
 {
+    if (id.x == 0 || id.y == 0 || id.x == _Resolution - 1 || id.y == _Resolution - 1)
+    {
+        _TextureWrite[id.xy] = _TextureRead[id.xy];
+        return;
+    }
+        
     if (id.x >= _Resolution || id.y >= _Resolution)
         return;
     
     uint2 index = id.xy;
-    int2 offset = int2(1,0); 
-    uint sampleUp       = _TextureRead[index + offset.yx];
-    uint sampleDown     = _TextureRead[index - offset.yx];
-    uint sampleLeft     = _TextureRead[index - offset.xy];
-    uint sampleRight    = _TextureRead[index + offset.xy];
-    uint sampleSelf     = _TextureRead[index];
+    int3 offset = int3(-1, 0, +1); 
+    uint sample12 = _TextureRead[index + offset.yz];
+    uint sample10 = _TextureRead[index + offset.yx];
+    uint sample01 = _TextureRead[index + offset.xy];
+    uint sample21 = _TextureRead[index + offset.zy];
+    uint sample11 = _TextureRead[index + offset.yy];
     
-    uint sum = sampleUp + sampleDown + sampleLeft + sampleRight + sampleSelf;
+    uint sample00 = _TextureRead[index + offset.xx];
+    uint sample02 = _TextureRead[index + offset.xz];
+    uint sample20 = _TextureRead[index + offset.zx];
+    uint sample22 = _TextureRead[index + offset.zz];
     
-    sum = 0;
+    if (!IsCellAvailable(sample11))
+    {
+        _TextureWrite[id.xy] = _TextureRead[id.xy];
+        return;
+    }
+    
+    float massSum = 0;
     for (int x = -1; x <= 1; x++)
     {
         for (int y = -1; y <= 1; y++)
         {
-            sum += _TextureRead[index + int2(x,y)];
+            massSum += GetFungalMass(_TextureRead[index + int2(x,y)]);
         }    
     }
     
-    uint output = 0;
-    if (sum > 0)
-        output = 1;
+    float maxAttractant = GetMaxChemoAttractant(id.xy);
     
-    if (sum > 7)
-        output = 0;
+    float massSelf = GetFungalMass(sample11);
+    
+    float massNew = massSelf;
+    massNew += _PMP.x * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.xy, maxAttractant)) * GetFungalMass(sample01) - _PMP.z * massSelf);
+    massNew += _PMP.x * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.zy, maxAttractant)) * GetFungalMass(sample21) - _PMP.z * massSelf);
+    massNew += _PMP.x * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.yx, maxAttractant)) * GetFungalMass(sample10) - _PMP.z * massSelf);
+    massNew += _PMP.x * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.yz, maxAttractant)) * GetFungalMass(sample12) - _PMP.z * massSelf);
+    massNew += _PMP.y * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.xx, maxAttractant)) * GetFungalMass(sample00) - _PMP.z * massSelf);
+    massNew += _PMP.y * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.zx, maxAttractant)) * GetFungalMass(sample20) - _PMP.z * massSelf);
+    massNew += _PMP.y * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.xz, maxAttractant)) * GetFungalMass(sample02) - _PMP.z * massSelf);
+    massNew += _PMP.y * ((1 + GetPhysarumAttractionAtPosition(id.xy, offset.zz, maxAttractant)) * GetFungalMass(sample22) - _PMP.z * massSelf);
+    
+    
+    
+    float chemoSelf = GetChemoAttractant(sample11);
+    
+    float attractantNew = chemoSelf;
+    attractantNew += _CAP.x * (GetChemoAttractant(sample01) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.x * (GetChemoAttractant(sample21) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.x * (GetChemoAttractant(sample10) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.x * (GetChemoAttractant(sample12) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.y * (GetChemoAttractant(sample00) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.y * (GetChemoAttractant(sample22) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.y * (GetChemoAttractant(sample20) - _CAP.z * chemoSelf);
+    attractantNew += _CAP.y * (GetChemoAttractant(sample02) - _CAP.z * chemoSelf);
+    
+    attractantNew *= _ChemoConsumption;
+    
+    massNew = saturate(massNew);
+    attractantNew = saturate(attractantNew);
+    
+    uint output = SetCell(massNew, attractantNew);
     
     _TextureWrite[id.xy] = output;
 }
