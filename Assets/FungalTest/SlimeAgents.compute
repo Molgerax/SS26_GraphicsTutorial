@@ -1,0 +1,209 @@
+#pragma kernel Initialize
+#pragma kernel InitTexture
+#pragma kernel Tick
+#pragma kernel DrawToTexture
+#pragma kernel TickTexture
+#pragma kernel Copy
+
+#define THREAD_SIZE 256
+#define THREAD_SIZE_TEXTURE 8
+
+#include "FungusData.hlsl"
+#include "Hash.hlsl"
+#include "SimplexNoise.hlsl"
+
+struct Agent
+{
+    float4 position;
+    float4 velocity;
+    float4 data;
+    float4 data2;
+};
+
+RWStructuredBuffer<Agent> _AgentBuffer;
+
+RWTexture2D<float4> _TextureWrite;
+Texture2D<float4> _TextureRead;
+
+uint _AgentCount;
+int _Resolution;
+int _Step;
+
+float _PhysarumAttraction;
+float _ChemoConsumption;
+
+#define PAP (_PhysarumAttraction)
+
+float3 _PMP;
+float3 _CAP;
+
+float _NoiseScale;
+float _NoiseCutoff;
+
+float _DeltaTime;
+float _Time;
+
+float _AgentSpeed;
+float _DecaySpeed;
+float _DiffuseSpeed;
+
+[numthreads(THREAD_SIZE,1,1)]
+void Initialize (uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= _AgentCount)
+        return;
+    
+    
+    Agent a = (Agent)0;
+    
+    uint hash = xxhash(index);
+    
+    uint hashX = hash & 65535;
+    uint hashY = (hash >> 16) & 65535;
+    float hash01 = hash / 4294967295.0;
+    
+    float2 randomUV = float2(hashX, hashY) / 65535.0;
+    
+    float t = index / (_AgentCount - 1.0);
+    
+    a.position.xy = saturate(randomUV) * _Resolution;
+    
+    float angle = t * 3.1415 * 2;
+    a.data.x = angle;
+    
+    _AgentBuffer[index] = a;
+}
+
+
+[numthreads(THREAD_SIZE_TEXTURE,THREAD_SIZE_TEXTURE,1)]
+void InitTexture (uint3 id : SV_DispatchThreadID)
+{
+    _TextureWrite[id.xy] = 0;
+}
+
+
+float sense(Agent agent, float sensorAngleOffset) {
+    float sensorAngle = agent.data.x + sensorAngleOffset;
+    float2 sensorDir = float2(cos(sensorAngle), sin(sensorAngle));
+
+    float2 sensorPos = agent.position + sensorDir * 0.1;
+    int sensorCentreX = (int) sensorPos.x;
+    int sensorCentreY = (int) sensorPos.y;
+
+    float sum = 0;
+
+    int4 senseWeight = 1;
+
+    for (int offsetX = -1; offsetX <= 1; offsetX ++) {
+        for (int offsetY = -1; offsetY <= 1; offsetY ++) {
+            int sampleX = min(_Resolution - 1, max(0, sensorCentreX + offsetX));
+            int sampleY = min(_Resolution - 1, max(0, sensorCentreY + offsetY));
+            sum += dot(senseWeight, _TextureRead[int2(sampleX,sampleY)]);
+        }
+    }
+
+    return sum;
+}
+
+
+[numthreads(THREAD_SIZE,1,1)]
+void Tick (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _AgentCount)
+        return;
+    
+    uint index = id.x;
+    
+    Agent agent = _AgentBuffer[index];
+    
+    float sensorAngleRad = 30 * (3.1415 / 180);
+    float weightForward = sense(agent, 0);
+    float weightLeft = sense(agent, sensorAngleRad);
+    float weightRight = sense(agent, -sensorAngleRad);
+    
+    float turnSpeed = 3.1415 * 2 * 50;
+    float randomSteerStrength = 1;
+    
+    // Continue in same direction
+    if (weightForward > weightLeft && weightForward > weightRight) {
+        agent.data.x += 0;
+    }
+    else if (weightForward < weightLeft && weightForward < weightRight) {
+        agent.data.x += (randomSteerStrength - 0.5) * 2 * turnSpeed * _DeltaTime;
+    }
+    // Turn right
+    else if (weightRight > weightLeft) {
+        agent.data.x -= randomSteerStrength * turnSpeed * _DeltaTime;
+    }
+    // Turn left
+    else if (weightLeft > weightRight) {
+        agent.data.x += randomSteerStrength * turnSpeed * _DeltaTime;
+    }
+    
+    float2 vel = float2(cos(agent.data.x), sin(agent.data.x)) * _AgentSpeed;
+    agent.position.xy += vel * _DeltaTime;
+    
+    if (agent.position.x < 0 || agent.position.x > _Resolution || agent.position.y < 0 || agent.position.y > _Resolution)
+    {
+        agent.position.xy = clamp(agent.position.xy, 0, _Resolution);
+        agent.data.x = xxhash(index + agent.position.x * _Resolution + agent.position.y + _Time) / 4294967295.0 * 3.1415 * 2;
+    }
+    
+    _AgentBuffer[index] = agent;
+}
+
+[numthreads(THREAD_SIZE,1,1)]
+void DrawToTexture (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _AgentCount)
+        return;
+    
+    uint index = id.x;
+    
+    Agent agent = _AgentBuffer[index];
+    uint2 cellId = (uint2)agent.position.xy;
+    
+    _TextureWrite[cellId] = 1;
+}
+
+[numthreads(THREAD_SIZE_TEXTURE,THREAD_SIZE_TEXTURE,1)]
+void TickTexture (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Resolution || id.y >= _Resolution)
+        return;
+    
+    float4 read = _TextureRead[id.xy];
+    
+    
+    float4 sum = 0;
+    for (int x = -1; x <= 1; x++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            float4 sampleCell = _TextureRead[id.xy + int2(x,y)];
+            sum += sampleCell;
+        }    
+    }
+    sum /= 9;
+    
+    float diffuseWeight = saturate(_DiffuseSpeed * _DeltaTime);
+    read = read * (1 - diffuseWeight) + sum * diffuseWeight;
+    
+    read -= _DecaySpeed * _DeltaTime;
+    
+    read = max(0, read);
+    
+    _TextureWrite[id.xy] = read;
+}
+
+
+
+[numthreads(THREAD_SIZE_TEXTURE,THREAD_SIZE_TEXTURE,1)]
+void Copy (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Resolution || id.y >= _Resolution)
+        return;
+    
+    _TextureWrite[id.xy] = _TextureRead[id.xy];
+}
